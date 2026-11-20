@@ -6,6 +6,10 @@
 
 ---
 
+**Họ và tên:** Vương Trường Giang  
+**MSSV:** 2A202603834  
+**Lớp:** L3B
+
 ## Thời lượng
 
 | Phần | Thời gian |

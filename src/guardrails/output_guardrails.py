@@ -13,6 +13,7 @@ from google.adk import runners
 from google.adk.plugins import base_plugin
 
 from core.utils import chat_with_agent
+from core.config import DEMO_SECRETS
 
 
 # ============================================================
@@ -47,10 +48,21 @@ def content_filter(response: str) -> dict:
         # - National ID (CMND/CCCD): r"\b\d{9}\b|\b\d{12}\b"
         # - API key pattern: r"sk-[a-zA-Z0-9-]+"
         # - Password pattern: r"password\s*[:=]\s*\S+"
+        "email": r"[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}",
+        "api_key": r"\bsk-[a-zA-Z0-9_-]+",
+        "password": r"\b(?:password|passwd|mật\s+khẩu)\s*(?::|=|\bis\b|\blà\b)\s*[^\s,;]+",
+        "database_host": r"\b(?:[\w-]+\.)+(?:internal|local)(?::\d{1,5})?\b",
+        "phone": r"(?<!\d)(?:\+84|0)(?:[\s.-]*\d){9,10}(?!\d)",
+        "national_id": r"(?<!\d)(?:\d{9}|\d{12})(?!\d)",
     }
 
+    for secret in sorted(DEMO_SECRETS, key=len, reverse=True):
+        if secret and re.search(re.escape(secret), redacted, re.IGNORECASE):
+            issues.append("protected secret found")
+            redacted = re.sub(re.escape(secret), "[REDACTED]", redacted, flags=re.IGNORECASE)
+
     for name, pattern in PII_PATTERNS.items():
-        matches = re.findall(pattern, response, re.IGNORECASE)
+        matches = re.findall(pattern, redacted, re.IGNORECASE)
         if matches:
             issues.append(f"{name}: {len(matches)} found")
             redacted = re.sub(pattern, "[REDACTED]", redacted, flags=re.IGNORECASE)
@@ -154,7 +166,7 @@ class OutputGuardrailPlugin(base_plugin.BasePlugin):
         """Extract text from LLM response."""
         text = ""
         if hasattr(llm_response, "content") and llm_response.content:
-            for part in llm_response.content.parts:
+            for part in llm_response.content.parts or []:
                 if hasattr(part, "text") and part.text:
                     text += part.text
         return text
@@ -181,7 +193,23 @@ class OutputGuardrailPlugin(base_plugin.BasePlugin):
         #    - Increment self.blocked_count
         # 3. Return llm_response (possibly modified)
 
-        return llm_response  # TODO: modify if needed
+        result = content_filter(response_text)
+        replacement = None
+        if not result["safe"]:
+            replacement = result["redacted"]
+            self.redacted_count += 1
+        if self.use_llm_judge:
+            verdict = await llm_safety_check(response_text)
+            if not verdict["safe"]:
+                replacement = "Response withheld for safety."
+                self.blocked_count += 1
+        if replacement is not None:
+            other_parts = [part for part in llm_response.content.parts or [] if not part.text]
+            llm_response.content = types.Content(
+                role=llm_response.content.role,
+                parts=[types.Part.from_text(text=replacement), *other_parts],
+            )
+        return llm_response
 
 
 # ============================================================
